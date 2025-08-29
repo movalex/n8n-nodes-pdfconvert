@@ -50,7 +50,8 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "pdf-img-convert": "^2.0.0"
+    "pdf-img-convert": "^2.0.0",
+    "canvas": "^2.11.2"
   },
   "peerDependencies": {
     "n8n-workflow": "*"

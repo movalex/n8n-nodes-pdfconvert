@@ -118,6 +118,18 @@ export class PdfConvert implements INodeType {
 
 		// Dynamic import for pdf-img-convert (ESM module)
 		const pdf2img = await import('pdf-img-convert');
+		
+		// Try to set up Canvas for server-side rendering
+		try {
+			const Canvas = await import('canvas');
+			// Set up global Canvas if not already available
+			if (typeof (globalThis as any).HTMLCanvasElement === 'undefined') {
+				(globalThis as any).HTMLCanvasElement = Canvas.Canvas;
+			}
+		} catch (error) {
+			// Canvas not available, pdf-img-convert will try to work without it
+			console.warn('Canvas not available for PDF conversion:', (error as Error).message);
+		}
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
