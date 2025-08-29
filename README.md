@@ -1,48 +1,154 @@
-![Banner image](https://user-images.githubusercontent.com/10284570/173569848-c624317f-42b1-45a6-ab09-f0ea3c247648.png)
+# n8n-nodes-pdfconvert
 
-# n8n-nodes-starter
+This package contains the PDF Convert node for [n8n](https://n8n.io). It provides functionality to convert PDF files into individual page images (PNG/JPG format).
 
-This repo contains example nodes to help you get started building your own custom integrations for [n8n](https://n8n.io). It includes the node linter and other dependencies.
+## Features
 
-To make your custom node available to the community, you must create it as an npm package, and [submit it to the npm registry](https://docs.npmjs.com/packages-and-modules/contributing-packages-to-the-registry).
+- ✅ Convert PDF files to images (PNG or JPG)
+- ✅ Process all pages or specific page ranges
+- ✅ Configurable image scale/resolution  
+- ✅ Support for binary data and base64 input
+- ✅ Lightweight implementation using pdf-img-convert
+- ✅ Perfect for scanned PDFs and image extraction
 
-If you would like your node to be available on n8n cloud you can also [submit your node for verification](https://docs.n8n.io/integrations/creating-nodes/deploy/submit-community-nodes/).
+## Installation
 
-## Prerequisites
+To install this community node, follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n docs.
 
-You need the following installed on your development machine:
+### Manual Installation
 
-* [git](https://git-scm.com/downloads)
-* Node.js and npm. Minimum version Node 20. You can find instructions on how to install both using nvm (Node Version Manager) for Linux, Mac, and WSL [here](https://github.com/nvm-sh/nvm). For Windows users, refer to Microsoft's guide to [Install NodeJS on Windows](https://docs.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-windows).
-* Install n8n with:
-  ```
-  npm install n8n -g
-  ```
-* Recommended: follow n8n's guide to [set up your development environment](https://docs.n8n.io/integrations/creating-nodes/build/node-development-environment/).
+```bash
+npm install n8n-nodes-pdfconvert
+```
 
-## Using this starter
+## Usage
 
-These are the basic steps for working with the starter. For detailed guidance on creating and publishing nodes, refer to the [documentation](https://docs.n8n.io/integrations/creating-nodes/).
+### Node Configuration
 
-1. [Generate a new repository](https://github.com/n8n-io/n8n-nodes-starter/generate) from this template repository.
-2. Clone your new repo:
-   ```
-   git clone https://github.com/<your organization>/<your-repo-name>.git
-   ```
-3. Run `npm i` to install dependencies.
-4. Open the project in your editor.
-5. Browse the examples in `/nodes` and `/credentials`. Modify the examples, or replace them with your own nodes.
-6. Update the `package.json` to match your details.
-7. Run `npm run lint` to check for errors or `npm run lintfix` to automatically fix errors when possible.
-8. Test your node locally. Refer to [Run your node locally](https://docs.n8n.io/integrations/creating-nodes/test/run-node-locally/) for guidance.
-9. Replace this README with documentation for your node. Use the [README_TEMPLATE](README_TEMPLATE.md) to get started.
-10. Update the LICENSE file to use your details.
-11. [Publish](https://docs.npmjs.com/packages-and-modules/contributing-packages-to-the-registry) your package to npm.
+The PDF Convert node provides the following configuration options:
 
-## More information
+#### Input Type
+- **Binary Data**: Use PDF data from file uploads or previous nodes
+- **Base64**: Use base64-encoded PDF string
 
-Refer to our [documentation on creating nodes](https://docs.n8n.io/integrations/creating-nodes/) for detailed information on building your own nodes.
+#### Output Options
+- **Output Format**: Choose PNG or JPG for resulting images
+- **Scale**: Control image resolution (0.5x to 5x, default 2x)
+- **Pages**: Specify pages to convert (e.g., "1,2,3" or "1-5" or leave empty for all)
+
+#### Input/Output Properties
+- **Binary Property**: Name of input property containing PDF data (default: "data")
+- **Output Property Name**: Name for output property containing converted images (default: "images")
+
+### Examples
+
+#### Example 1: Convert all PDF pages to PNG
+```
+Input: PDF file via HTTP Request or File node
+Configuration:
+- Input Type: Binary Data
+- Output Format: PNG
+- Scale: 2
+- Pages: (empty - converts all pages)
+```
+
+#### Example 2: Convert specific pages to high-res JPG
+```
+Input: PDF file
+Configuration:
+- Input Type: Binary Data  
+- Output Format: JPG
+- Scale: 3
+- Pages: 1,3-5,10
+```
+
+#### Example 3: Convert base64 PDF to images
+```
+Input: Base64 PDF string
+Configuration:
+- Input Type: Base64
+- Base64 Data: {{$json.pdfBase64}}
+- Output Format: PNG
+- Scale: 2
+```
+
+### Output Format
+
+The node outputs:
+- **JSON Data**: Metadata about converted images
+- **Binary Data**: Individual page images as binary data
+
+JSON output structure:
+```json
+{
+  "images": [
+    {
+      "data": Buffer,
+      "mimeType": "image/png",
+      "fileName": "page_1.png", 
+      "fileExtension": "png",
+      "pageNumber": 1
+    }
+  ],
+  "totalPages": 3,
+  "outputFormat": "png",
+  "scale": 2
+}
+```
+
+Binary output: Each page is also available as binary data with property names like `images_page_1`, `images_page_2`, etc.
+
+## Use Cases
+
+- Extract pages from scanned documents
+- Convert PDF presentations to image slides
+- Generate thumbnails from PDF files
+- Process invoices/receipts for OCR workflows
+- Archive PDF content as individual images
+
+## Technical Details
+
+- Built with TypeScript for n8n
+- Uses pdf-img-convert library (lightweight, PDF.js-based)
+- No external dependencies (GraphicsMagick, Ghostscript)
+- Supports Node.js 20.15+
+
+## Development
+
+### Prerequisites
+
+- Node.js >= 20.15
+- n8n installed globally: `npm install n8n -g`
+
+### Setup
+
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Build the node: `npm run build`
+4. Link for development: `npm link`
+
+### Testing
+
+```bash
+npm run lint        # Check code quality
+npm run build       # Build the project
+npm run dev         # Watch mode for development
+```
 
 ## License
 
-[MIT](https://github.com/n8n-io/n8n-nodes-starter/blob/master/LICENSE.md)
+[MIT](LICENSE.md)
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Support
+
+If you encounter any issues or have questions:
+1. Check the [n8n documentation](https://docs.n8n.io/integrations/community-nodes/)
+2. Open an issue on [GitHub](https://github.com/movalex/n8n-nodes-pdfconvert/issues)
+
+---
+
+Made with ❤️ for the n8n community
