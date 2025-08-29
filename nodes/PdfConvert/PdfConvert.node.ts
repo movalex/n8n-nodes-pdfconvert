@@ -173,44 +173,66 @@ export class PdfConvert implements INodeType {
 					page_numbers: pageNumbers,
 				};
 
-				const outputImages = await pdf2img.convert(pdfBuffer, conversionOptions) as Uint8Array[];
+					try {
+						const outputImages = await pdf2img.convert(pdfBuffer, conversionOptions) as Uint8Array[];
 
-				// Convert Uint8Array images to proper format
-				const images = outputImages.map((imageData, index) => {
-					const pageNumber = pageNumbers ? pageNumbers[index] : index + 1;
-					return {
-						data: Buffer.from(imageData),
-						mimeType: outputFormat === 'png' ? 'image/png' : 'image/jpeg',
-						fileName: `page_${pageNumber}.${outputFormat}`,
-						fileExtension: outputFormat,
-						pageNumber,
-					};
-				});
+						// Convert Uint8Array images to proper format
+						const images = outputImages.map((imageData, index) => {
+							const pageNumber = pageNumbers ? pageNumbers[index] : index + 1;
+							return {
+								data: Buffer.from(imageData),
+								mimeType: outputFormat === 'png' ? 'image/png' : 'image/jpeg',
+								fileName: `page_${pageNumber}.${outputFormat}`,
+								fileExtension: outputFormat,
+								pageNumber,
+							};
+						});
 
-				// Create output item
-				const outputItem: INodeExecutionData = {
-					json: {
-						...items[itemIndex].json,
-						[outputPropertyName]: images,
-						totalPages: images.length,
-						outputFormat,
-						scale,
-					},
-					binary: {},
-				};
+						// Create output item
+						const outputItem: INodeExecutionData = {
+							json: {
+								...items[itemIndex].json,
+								[outputPropertyName]: images,
+								totalPages: images.length,
+								outputFormat,
+								scale,
+							},
+							binary: {},
+						};
 
-				// Also add images as binary data for easier use in workflows
-				images.forEach((image, index) => {
-					const binaryPropertyName = `${outputPropertyName}_page_${image.pageNumber}`;
-					outputItem.binary![binaryPropertyName] = {
-						data: image.data.toString('base64'),
-						mimeType: image.mimeType,
-						fileName: image.fileName,
-						fileExtension: image.fileExtension,
-					};
-				});
+						// Also add images as binary data for easier use in workflows
+						images.forEach((image, index) => {
+							const binaryPropertyName = `${outputPropertyName}_page_${image.pageNumber}`;
+							outputItem.binary![binaryPropertyName] = {
+								data: image.data.toString('base64'),
+								mimeType: image.mimeType,
+								fileName: image.fileName,
+								fileExtension: image.fileExtension,
+							};
+						});
 
-				returnData.push(outputItem);
+						returnData.push(outputItem);
+
+					} catch (conversionError) {
+						// Handle Canvas/conversion specific errors
+						const errorMessage = `PDF conversion failed: ${(conversionError as Error).message}. This might be due to missing Canvas dependencies. Please ensure the n8n container has the required system dependencies installed.`;
+						
+						if (this.continueOnFail()) {
+							returnData.push({
+								json: { 
+									...items[itemIndex].json, 
+									error: errorMessage,
+									originalError: (conversionError as Error).message
+								},
+								error: conversionError,
+								pairedItem: itemIndex,
+							});
+						} else {
+							throw new NodeOperationError(this.getNode(), errorMessage, {
+								itemIndex,
+							});
+						}
+					}
 
 			} catch (error) {
 				if (this.continueOnFail()) {
