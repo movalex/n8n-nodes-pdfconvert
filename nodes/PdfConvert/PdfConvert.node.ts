@@ -4,7 +4,23 @@ import type {
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
-import { NodeConnectionType, NodeOperationError } from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { createCanvas } from '@napi-rs/canvas';
+import * as path from 'path';
+
+// pdfjs-dist v4 is ESM-only. Under module:commonjs tsc rewrites `await import()`
+// into `require()`, which cannot load ESM — the indirection below prevents that rewrite.
+// The legacy build is required: in Node it disables the worker and resolves
+// workerSrc internally; the modern build throws "No workerSrc specified".
+const importPdfjs = new Function(
+	'return import("pdfjs-dist/legacy/build/pdf.mjs")',
+) as () => Promise<typeof import('pdfjs-dist')>;
+
+// Directories with cMaps and standard fonts shipped inside pdfjs-dist; needed to
+// render PDFs that rely on non-embedded or CID-keyed fonts.
+const pdfjsRoot = path.dirname(require.resolve('pdfjs-dist/package.json'));
+const CMAP_URL = path.join(pdfjsRoot, 'cmaps') + path.sep;
+const STANDARD_FONT_DATA_URL = path.join(pdfjsRoot, 'standard_fonts') + path.sep;
 
 export class PdfConvert implements INodeType {
 	description: INodeTypeDescription = {
@@ -13,12 +29,12 @@ export class PdfConvert implements INodeType {
 		icon: 'file:pdfconvert.svg',
 		group: ['transform'],
 		version: 1,
-		description: 'Convert PDF files to images using pdf2pic',
+		description: 'Convert PDF files to images (no system dependencies)',
 		defaults: {
 			name: 'PDF Convert',
 		},
-		inputs: [NodeConnectionType.Main],
-		outputs: [NodeConnectionType.Main],
+		inputs: [NodeConnectionTypes.Main],
+		outputs: [NodeConnectionTypes.Main],
 		properties: [
 			{
 				displayName: 'Binary Property',
@@ -65,126 +81,78 @@ export class PdfConvert implements INodeType {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
 
+		const pdfjs = await importPdfjs();
+
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
 				const binaryPropertyName = this.getNodeParameter('binaryPropertyName', itemIndex) as string;
-				const format = this.getNodeParameter('format', itemIndex) as string;
+				const format = this.getNodeParameter('format', itemIndex) as 'png' | 'jpeg';
 				const density = this.getNodeParameter('density', itemIndex) as number;
 				const outputProperty = this.getNodeParameter('outputProperty', itemIndex) as string;
 
-				// Get PDF buffer
 				this.helpers.assertBinaryData(itemIndex, binaryPropertyName);
 				const pdfBuffer = await this.helpers.getBinaryDataBuffer(itemIndex, binaryPropertyName);
 
-				// Write PDF to temporary file
-				const fs = await import('fs');
-				const path = await import('path');
-				const os = await import('os');
-				
-				const tempDir = os.tmpdir();
-				const tempPdfPath = path.join(tempDir, `pdf_${Date.now()}_${itemIndex}.pdf`);
-				
-				await fs.promises.writeFile(tempPdfPath, pdfBuffer);
+				const scale = density / 72;
+				const pdfDoc = await pdfjs.getDocument({
+					data: new Uint8Array(pdfBuffer),
+					cMapUrl: CMAP_URL,
+					cMapPacked: true,
+					standardFontDataUrl: STANDARD_FONT_DATA_URL,
+				}).promise;
+				const numPages = pdfDoc.numPages;
 
-				try {
-					// Import pdf2pic dynamically
-					const { fromPath } = await import('pdf2pic');
-					
-					// Configure pdf2pic
-					const convert = fromPath(tempPdfPath, {
-						density: density,
-						saveFilename: `page`,
-						savePath: tempDir,
-						format: format,
-						width: undefined, // Keep original aspect ratio
-						height: undefined,
-					});
-
-					// Convert all pages
-					const results = await convert.bulk(-1); // -1 means all pages
-
-					// Process results
-					const images: Array<{
-						data: Buffer;
-						mimeType: string;
-						fileName: string;
-						pageNumber: number;
-					}> = [];
-
-					for (const result of results) {
-						if (result.path) {
-							const imageBuffer = await fs.promises.readFile(result.path);
-							images.push({
-								data: imageBuffer,
-								mimeType: format === 'png' ? 'image/png' : 'image/jpeg',
-								fileName: `page_${result.page}.${format}`,
-								pageNumber: result.page || 1,
-							});
-							
-							// Clean up temporary image file
-							try {
-								await fs.promises.unlink(result.path);
-							} catch (cleanupError) {
-								// Ignore cleanup errors
-							}
-						}
-					}
-
-					// Create output
-					const outputItem: INodeExecutionData = {
-						json: {
-							...items[itemIndex].json,
-							[outputProperty]: {
-								totalPages: images.length,
-								format,
-								density,
-								pdfSize: pdfBuffer.length,
-							},
+				const outputItem: INodeExecutionData = {
+					json: {
+						...items[itemIndex].json,
+						[outputProperty]: {
+							totalPages: numPages,
+							format,
+							density,
+							pdfSize: pdfBuffer.length,
 						},
-						binary: {},
+					},
+					binary: {},
+				};
+
+				for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+					const page = await pdfDoc.getPage(pageNum);
+					const viewport = page.getViewport({ scale });
+					const canvas = createCanvas(Math.round(viewport.width), Math.round(viewport.height));
+					const context = canvas.getContext('2d');
+
+					await page.render({
+						canvasContext: context as object,
+						viewport,
+					}).promise;
+
+					const mimeType: 'image/png' | 'image/jpeg' =
+						format === 'png' ? 'image/png' : 'image/jpeg';
+					const imageBuffer =
+						format === 'png' ? await canvas.encode('png') : await canvas.encode('jpeg');
+					const binaryKey = `${outputProperty}_page_${pageNum}`;
+
+					outputItem.binary![binaryKey] = {
+						data: imageBuffer.toString('base64'),
+						mimeType,
+						fileName: `page_${pageNum}.${format}`,
+						fileExtension: format,
 					};
-
-					// Add images as binary data
-					images.forEach((image, index) => {
-						const binaryKey = `${outputProperty}_page_${image.pageNumber}`;
-						outputItem.binary![binaryKey] = {
-							data: image.data.toString('base64'),
-							mimeType: image.mimeType,
-							fileName: image.fileName,
-							fileExtension: format,
-						};
-					});
-
-					returnData.push(outputItem);
-
-				} finally {
-					// Clean up temporary PDF file
-					try {
-						await fs.promises.unlink(tempPdfPath);
-					} catch (cleanupError) {
-						// Ignore cleanup errors
-					}
 				}
 
+				returnData.push(outputItem);
 			} catch (error) {
-				// Enhanced error handling
-				let errorMessage = (error as Error).message;
-				
-				if (errorMessage.includes('pdf2pic')) {
-					errorMessage = `PDF conversion failed: ${errorMessage}. Make sure GraphicsMagick or ImageMagick is installed in your system.`;
-				}
-
 				if (this.continueOnFail()) {
 					returnData.push({
-						json: { 
-							...items[itemIndex].json, 
-							error: errorMessage,
+						json: {
+							...items[itemIndex].json,
+							error: (error as Error).message,
 							conversionFailed: true,
 						},
 						pairedItem: itemIndex,
 					});
 				} else {
-					throw new NodeOperationError(this.getNode(), errorMessage, { itemIndex });
+					throw new NodeOperationError(this.getNode(), error as Error, { itemIndex });
 				}
 			}
 		}
