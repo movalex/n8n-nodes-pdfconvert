@@ -1,118 +1,32 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+n8n community node that converts a PDF into one image per page (PNG/JPEG). Conversion is pure JS via `pdfjs-dist` (Mozilla PDF.js) + `@napi-rs/canvas` — no GraphicsMagick, ImageMagick, or Ghostscript, no system packages.
 
-## Project Overview
+## Commands
 
-This is an n8n community node package that converts PDF files to images (PNG/JPEG). Built as a TypeScript-based n8n node using the pdf2pic library.
+- `npm run build` — clean `dist/`, compile TypeScript, copy icons (gulp)
+- `npm run dev` — tsc watch
+- `npm run lint` / `lintfix` — ESLint
+- `node test-node.cjs <pdf>` — load the compiled `dist/` artifact via require() exactly as n8n does and run execute() against a PDF (build first)
 
-## Build & Development Commands
+## Critical constraints
 
-### Core Commands
-- `npm run build` - Full build (clean dist, compile TypeScript, copy icons)
-- `npm run dev` - Watch mode for development (TypeScript compiler only)
-- `npm run lint` - Run ESLint on nodes and package.json
-- `npm run lintfix` - Auto-fix linting issues
-- `npm run format` - Format code with Prettier
+The node compiles with `module: commonjs` (required by n8n), but `pdfjs-dist` v4 is ESM-only. Two non-obvious things in [PdfConvert.node.ts](nodes/PdfConvert/PdfConvert.node.ts) make it load:
 
-### Build Process Details
-The build is two-phase:
-1. TypeScript compilation to `dist/` (via tsc)
-2. Icon copying via Gulp task (`gulp build:icons`) - copies SVG/PNG files from `nodes/**/*` to `dist/nodes/`
+1. pdfjs is imported through `new Function('return import("...")')`. A plain `await import('pdfjs-dist')` gets rewritten by tsc into `require()`, which throws `ERR_REQUIRE_ESM`. The `new Function` wrapper hides the import from tsc so it survives as a real dynamic import.
+2. It imports the **legacy** build (`pdfjs-dist/legacy/build/pdf.mjs`). Under Node the legacy build disables the worker and self-resolves `workerSrc`; the modern build throws `No "GlobalWorkerOptions.workerSrc" specified`.
 
-### Testing in n8n
-After building, use `npm link` to test the node in a local n8n installation. The node appears as "PDF Convert" in the n8n editor.
+`cMapUrl` and `standardFontDataUrl` are passed to `getDocument()` pointing into the installed pdfjs package, so PDFs with non-embedded/CID fonts render.
 
-## Architecture
+`@napi-rs/canvas` resolves a native binary per platform at install time — always install inside the target environment (the n8n container), never copy `node_modules` across OSes.
 
-### n8n Node Structure
-All n8n nodes must follow this structure:
-- Implement `INodeType` interface
-- Export class with `description: INodeTypeDescription` and `execute()` method
-- Node configuration in `description.properties[]` defines UI parameters
-- Entry point defined in `package.json` under `n8n.nodes[]`
+## Output shape
 
-### Key Files
-- `nodes/PdfConvert/PdfConvert.node.ts` - Main node implementation
-- `nodes/PdfConvert/pdfconvert.svg` - Node icon (copied to dist during build)
-- `gulpfile.js` - Icon copy task
-- `tsconfig.json` - Strict TypeScript config with commonjs modules
+- `json[outputProperty]` — metadata: `{ totalPages, format, density, pdfSize }`
+- `binary` — one entry per page, key `{outputProperty}_page_{n}`, each `{ data, mimeType, fileName, fileExtension }`
 
-### Node Implementation Pattern
+All pages are converted; there is no page-range option. `NodeConnectionTypes` (plural) is the runtime value in n8n-workflow 2.x; `NodeConnectionType` is type-only.
 
-**Parameter Handling:**
-```typescript
-const param = this.getNodeParameter('paramName', itemIndex) as Type;
-```
+## Publishing
 
-**Binary Data Access:**
-```typescript
-this.helpers.assertBinaryData(itemIndex, propertyName);
-const buffer = await this.helpers.getBinaryDataBuffer(itemIndex, propertyName);
-```
-
-**Output Structure:**
-- `json` property: Metadata (totalPages, format, density, etc.)
-- `binary` property: Each image as separate binary data with key pattern `{outputProperty}_page_{pageNumber}`
-
-**Error Handling:**
-- Use `NodeOperationError` for throwing errors
-- Check `this.continueOnFail()` to handle errors gracefully
-- Add error details to json output when continuing on fail
-
-### PDF Conversion Flow
-
-1. Extract PDF buffer from binary data
-2. Write PDF to temporary file in OS temp directory
-3. Use pdf2pic's `fromPath()` to configure converter
-4. Call `convert.bulk(-1)` to convert all pages (-1 = all pages)
-5. Read each generated image file into buffer
-6. Package images into n8n binary data format (base64)
-7. Clean up temporary files (PDF and images)
-
-### Dependencies
-
-**Runtime:**
-- `pdf2pic` - PDF to image conversion (requires GraphicsMagick or ImageMagick on system)
-- `n8n-workflow` - Peer dependency (types and utilities)
-
-**System Requirements:**
-- Node.js >= 20.15
-- GraphicsMagick or ImageMagick must be installed on system for pdf2pic to work
-
-## Common Development Tasks
-
-### Adding New Node Parameters
-1. Add property definition to `description.properties[]` array
-2. Extract parameter in `execute()` using `this.getNodeParameter()`
-3. Pass to pdf2pic configuration or use in processing logic
-
-### Modifying Output Format
-Output structure is defined in lines 134-156 of PdfConvert.node.ts:
-- JSON metadata in `outputItem.json[outputProperty]`
-- Binary images in `outputItem.binary[binaryKey]` with base64 data
-
-### Changing Image Conversion Options
-pdf2pic configuration (lines 94-101):
-- `density` - DPI setting from node parameter
-- `format` - 'png' or 'jpeg' from node parameter
-- `width`/`height` - Currently undefined to maintain aspect ratio
-- `saveFilename` and `savePath` - Control temporary file locations
-
-## TypeScript Configuration
-
-Strict mode enabled with:
-- `noImplicitAny: true`
-- `strictNullChecks: true`
-- `noUnusedLocals: true`
-- `noImplicitReturns: true`
-
-Target: ES2019, Module: CommonJS (required for n8n compatibility)
-
-## Package Publishing
-
-Entry point: `index.js` (empty file, required by n8n)
-Published files: Only `dist/` directory (defined in package.json `files` array)
-n8n loads: `dist/nodes/PdfConvert/PdfConvert.node.js` (defined in package.json `n8n.nodes`)
-
-Pre-publish runs build and lint with stricter config (`.eslintrc.prepublish.js`)
+`files` ships only `dist/`. n8n loads `dist/nodes/PdfConvert/PdfConvert.node.js` (per `n8n.nodes` in package.json). `index.js` is an empty required entry point. `prepublishOnly` runs build + lint with `.eslintrc.prepublish.js`.
